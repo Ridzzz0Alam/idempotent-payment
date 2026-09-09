@@ -1,0 +1,5 @@
+/out
+*.log
+node_modules/
+.next/
+next-env.d.ts
