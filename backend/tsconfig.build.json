@@ -1,4 +1,10 @@
 {
   "extends": "./tsconfig.json",
+  // The base config needs rootDir "./" to typecheck proof/ and
+  // drizzle.config.ts, which sit outside src/. That would emit to
+  // dist/src/main.js, but package.json and the Dockerfile both run
+  // dist/main.js. The build excludes everything outside src/, so it can
+  // root there and emit the layout the entrypoints expect.
+  "compilerOptions": { "rootDir": "./src" },
   "exclude": ["node_modules", "dist", "proof", "drizzle.config.ts"]
 }
