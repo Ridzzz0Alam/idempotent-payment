@@ -16,19 +16,22 @@ const REFERENCE = "Order 7781, annual subscription";
 
 export default function Lab() {
   const [scenario, setScenario] = useState<Scenario>(SCENARIOS[0]);
-  const [key, setKey] = useState(() => `lab-${Date.now()}`);
+  // Empty until mounted. A Date.now() here would run once on the server and
+  // again in the browser, render two different keys, and fail hydration.
+  const [key, setKey] = useState("");
   const [result, setResult] = useState<PayResult | null>(null);
   const [running, setRunning] = useState(false);
   const [fault, setFault] = useState<string | null>(null);
 
   const { data: instances } = usePoll<InstanceHealth[]>("/api/instances", 1500);
   const { data: ledger, refresh: refreshLedger } = usePoll<Ledger>(
-    `/api/ledger?key=${encodeURIComponent(key)}`,
+    key ? `/api/ledger?key=${encodeURIComponent(key)}` : null,
     2500,
   );
 
   // A new scenario deserves a clean key, or you would be replaying the last
-  // scenario's payment and learning nothing.
+  // scenario's payment and learning nothing. This also mints the first key,
+  // since effects only run in the browser.
   useEffect(() => {
     setKey(`lab-${Date.now()}`);
     setResult(null);
@@ -126,7 +129,7 @@ export default function Lab() {
                 running={running}
                 result={result}
                 onPay={pay}
-                canPay={true}
+                canPay={key !== ""}
               />
               {fault && (
                 <p className="border-l-2 border-alarm pl-4 text-sm leading-relaxed">
