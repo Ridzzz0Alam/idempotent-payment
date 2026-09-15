@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  check,
   index,
   integer,
   pgTable,
@@ -24,13 +25,13 @@ export const payments = pgTable(
   (t) => [index("payments_idem_key_idx").on(t.idempotencyKey)],
 );
 
-// v0-naive. Note what is missing: `key` has no primary key and no unique
-// index. Uniqueness is "enforced" by a SELECT in application code, which is
-// only enforcement if the read and the write are atomic. They are not.
+// The arbiter. `key` is the primary key, so Postgres decides who wins a race
+// between concurrent writers, inside the same transaction as the payment
+// insert. No application code is involved in that decision.
 export const idempotencyKeys = pgTable(
   "idempotency_keys",
   {
-    key: text("key").notNull(),
+    key: text("key").primaryKey(),
     requestHash: text("request_hash").notNull(),
     status: text("status").notNull(),
     responseCode: integer("response_code"),
@@ -45,7 +46,14 @@ export const idempotencyKeys = pgTable(
       .notNull()
       .default(sql`now() + interval '24 hours'`),
   },
-  (t) => [index("idempotency_keys_key_idx").on(t.key)],
+  (t) => [
+    index("idempotency_keys_expires_idx").on(t.expiresAt),
+    check("status_check", sql`${t.status} IN ('in_progress', 'completed')`),
+    check(
+      "completed_has_response",
+      sql`${t.status} <> 'completed' OR (${t.responseCode} IS NOT NULL AND ${t.responseBody} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export type Payment = typeof payments.$inferSelect;

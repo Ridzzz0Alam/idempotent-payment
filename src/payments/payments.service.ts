@@ -12,11 +12,12 @@ export class PaymentsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * NAIVE implementation: read the key, and if it is not there, write it.
+   * Claims the idempotency key by inserting it, and treats the resulting
+   * conflict as the answer rather than asking a question first.
    *
-   * Correct in every sequential test. Wrong the moment two requests overlap,
-   * because the SELECT and the INSERT are two separate decisions with a gap
-   * between them, and the world changes in that gap.
+   * The claim and the payment insert share one transaction. That is the whole
+   * design. Because they commit together, there is no window in which a key
+   * exists without its payment, or a payment without its key.
    */
   async create(
     key: string,
@@ -25,27 +26,26 @@ export class PaymentsService {
   ): Promise<Outcome> {
     const hash = createHash("sha256").update(rawBody).digest("hex");
 
-    return this.db.transaction(async (tx) => {
-      // ---- CHECK ---------------------------------------------------------
-      const [existing] = await tx
-        .select()
-        .from(idempotencyKeys)
-        .where(eq(idempotencyKeys.key, key))
-        .limit(1);
+    const outcome = await this.db.transaction(async (tx) => {
+      // ---- CLAIM ---------------------------------------------------------
+      // onConflictDoNothing does not block on a conflicting uncommitted row;
+      // it returns zero rows immediately. At 500 concurrent that is the
+      // difference between 499 losers releasing their connection in
+      // microseconds and 499 losers queueing behind the winner until the pool
+      // is exhausted.
+      const claimed = await tx
+        .insert(idempotencyKeys)
+        .values({ key, requestHash: hash, status: "in_progress" })
+        .onConflictDoNothing({ target: idempotencyKeys.key })
+        .returning({ key: idempotencyKeys.key });
 
-      if (existing) {
-        if (existing.requestHash !== hash) return { kind: "mismatch" };
-        if (existing.status !== "completed") return { kind: "in_progress" };
-        return {
-          kind: "replayed",
-          code: existing.responseCode ?? 201,
-          body: existing.responseBody ?? "",
-        };
+      if (claimed.length === 0) {
+        // Someone else owns this key. Nothing here is ours to roll back, and
+        // the read has to happen outside this transaction to see their commit.
+        return null;
       }
 
-      // ---- ...AND THEN ACT -----------------------------------------------
-      // Every concurrent request that reached the CHECK before any of them
-      // committed also arrives here. Nothing in the database stops them.
+      // ---- WINNER --------------------------------------------------------
       const response = buildResponse(dto);
       const body = JSON.stringify(response);
 
@@ -58,16 +58,39 @@ export class PaymentsService {
         createdAt: new Date(response.created_at),
       });
 
-      await tx.insert(idempotencyKeys).values({
-        key,
-        requestHash: hash,
-        status: "completed",
-        responseCode: 201,
-        responseBody: body,
-      });
+      // Store the exact bytes returned to this caller, so every later replay
+      // is byte-identical rather than regenerated from the row.
+      await tx
+        .update(idempotencyKeys)
+        .set({ status: "completed", responseCode: 201, responseBody: body })
+        .where(eq(idempotencyKeys.key, key));
 
-      return { kind: "created", code: 201, body };
+      // Payment and key become visible in the same instant.
+      return { kind: "created", code: 201, body } satisfies Outcome;
     });
+
+    return outcome ?? this.replay(key, hash);
+  }
+
+  /** Serves a request whose key was already claimed by someone else. */
+  private async replay(key: string, hash: string): Promise<Outcome> {
+    const [row] = await this.db
+      .select()
+      .from(idempotencyKeys)
+      .where(eq(idempotencyKeys.key, key))
+      .limit(1);
+
+    // The claim conflicted but the row is invisible, so the winner is holding
+    // an uncommitted insert. There is no stored response to return yet.
+    if (!row) return { kind: "in_progress" };
+    if (row.requestHash !== hash) return { kind: "mismatch" };
+    if (row.status !== "completed") return { kind: "in_progress" };
+
+    return {
+      kind: "replayed",
+      code: row.responseCode ?? 201,
+      body: row.responseBody ?? "",
+    };
   }
 
   /** Row count for a key. The proof uses this as ground truth. */
