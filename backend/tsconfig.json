@@ -15,9 +15,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "baseUrl": "./",
-    "paths": { "@/*": ["src/*"] }
+    "emitDecoratorMetadata": true
   },
   "include": ["src/**/*", "proof/**/*", "drizzle.config.ts"],
   "exclude": ["node_modules", "dist"]
