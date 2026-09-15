@@ -45,20 +45,22 @@ is a data-loss bug wearing a success code.
 ## Layout
 
 ```
-src/
-├── main.ts                    Fastify adapter, rawBody, validation, shutdown hooks
-├── app.module.ts
-├── db/
-│   ├── schema.ts              Drizzle tables — the PRIMARY KEY lives here
-│   └── db.module.ts           pool, boot-time migration, graceful close
-├── payments/
-│   ├── payments.service.ts    ← the claim. read this one.
-│   ├── payments.controller.ts HTTP mapping only, no logic
-│   ├── idempotency.types.ts   Outcome union
-│   └── dto/create-payment.dto.ts
-└── health/health.controller.ts
-proof/proof.ts                 500 concurrent callers, one key, DB assertions
-web/                           Next.js console (unchanged from the Go build)
+backend/
+├── src/
+│   ├── main.ts                    Fastify adapter, rawBody, validation, shutdown hooks
+│   ├── app.module.ts
+│   ├── db/
+│   │   ├── schema.ts              Drizzle tables — the PRIMARY KEY lives here
+│   │   └── db.module.ts           pool, boot-time migration, graceful close
+│   ├── payments/
+│   │   ├── payments.service.ts    ← the claim. read this one.
+│   │   ├── payments.controller.ts HTTP mapping only, no logic
+│   │   ├── idempotency.types.ts   Outcome union
+│   │   └── dto/create-payment.dto.ts
+│   └── health/health.controller.ts
+├── proof/proof.ts                 500 concurrent callers, one key, DB assertions
+└── migrations/0001_schema.sql
+web/                              Next.js console (unchanged from the Go build)
 ```
 
 `payments.service.ts` is the only interesting file. Everything else is
@@ -67,10 +69,14 @@ transport, wiring, or measurement.
 ## Running it
 
 ```bash
-npm install
+cd backend && npm install
 make up          # postgres + two API instances + nginx on :8080
 make proof       # 500 concurrent requests, one key
 ```
+
+`make up`, `make down`, and `make proof` are run from the repo root — the
+`Makefile` and `docker-compose.yml` there orchestrate `backend/` (and, once
+it exists, a sibling frontend).
 
 Expected:
 
@@ -118,7 +124,7 @@ code against old constraints.
 The whole fix:
 
 ```bash
-git diff v0-naive v1-idempotent -- migrations src
+git diff v0-naive v1-idempotent -- backend/migrations backend/src
 ```
 
 ## The console

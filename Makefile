@@ -19,4 +19,4 @@ reset:
 	psql "$(DB)" -c "TRUNCATE payments, idempotency_keys"
 
 proof:
-	npm run proof -- --n $(N) --db "$(DB)" --label "$$(git describe --tags --always)"
+	cd backend && npm run proof -- --n $(N) --db "$(DB)" --label "$$(git describe --tags --always)"

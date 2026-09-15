@@ -14,7 +14,7 @@ services:
       retries: 15
 
   api-1: &api
-    build: .
+    build: ./backend
     environment:
       DATABASE_URL: postgres://idem:idem@db:5432/idem
       INSTANCE_ID: api-1
