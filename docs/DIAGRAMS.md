@@ -3,22 +3,25 @@
 Every diagram below is Mermaid and renders directly on GitHub, GitLab, Notion,
 and Obsidian. No image files to keep in sync with the code.
 
+The [README](../README.md) carries the diagrams that matter most. This file is
+the complete set.
+
 ---
 
 ## 1. System architecture
 
 Where each process lives and what it is allowed to talk to. The console never
-reaches the Go API directly; the harness is the only thing with a database
+reaches the API directly; the harness is the only thing with a database
 connection besides the API itself.
 
 ```mermaid
 flowchart LR
     subgraph browser["Browser"]
-        UI["Console UI<br/>app/page.tsx"]
+        UI["Console UI<br/>web/app/page.tsx"]
     end
 
     subgraph next["Next.js 16"]
-        RH["Burst route handler<br/>app/api/burst/route.ts"]
+        RH["Burst route handler<br/>web/app/api/burst/route.ts"]
     end
 
     subgraph edge["Load balancer"]
@@ -26,16 +29,16 @@ flowchart LR
     end
 
     subgraph app["Application tier"]
-        A1["api-1<br/>Go"]
-        A2["api-2<br/>Go"]
+        A1["api-1<br/>NestJS + Fastify"]
+        A2["api-2<br/>NestJS + Fastify"]
     end
 
     subgraph data["Data tier"]
-        PG[("Postgres")]
+        PG[("Postgres 16")]
         IDX{{"PRIMARY KEY on<br/>idempotency_keys.key"}}
     end
 
-    PROOF["Proof harness<br/>cmd/proof"]
+    PROOF["Proof harness<br/>backend/proof/proof.ts"]
 
     UI -->|"POST /api/burst"| RH
     RH -->|"N concurrent POSTs"| NX
@@ -50,7 +53,7 @@ flowchart LR
     PROOF -->|"SELECT count for ground truth"| PG
 
     style IDX fill:#1f4e79,color:#ffffff
-    style PROOF fill:#e4e7e3
+    style PROOF fill:#e4e7e3,color:#111111
 ```
 
 The blue box is the only thing arbitrating anything. Both API processes are
@@ -58,7 +61,45 @@ stateless and interchangeable; that is the point of running two.
 
 ---
 
-## 2. Request lifecycle, the winner
+## 2. Module graph
+
+How NestJS wires the pieces together. `DbModule` is global, so the `DB` token
+resolves anywhere without being re-imported.
+
+```mermaid
+flowchart TD
+    MAIN["main.ts<br/>NestFactory, FastifyAdapter,<br/>rawBody, ValidationPipe"]
+    APP["AppModule"]
+    CFG["ConfigModule<br/>global"]
+    DB["DbModule<br/>global"]
+    PAY["PaymentsModule"]
+    HEALTH["HealthController<br/>GET /healthz"]
+
+    CTRL["PaymentsController<br/>HTTP mapping only"]
+    SVC["PaymentsService<br/>the claim"]
+    POOL[("pg Pool<br/>max 20")]
+
+    MAIN --> APP
+    APP --> CFG
+    APP --> DB
+    APP --> PAY
+    APP --> HEALTH
+    PAY --> CTRL
+    PAY --> SVC
+    CTRL --> SVC
+    DB --> POOL
+    SVC -->|"DB token"| POOL
+
+    style SVC fill:#1f4e79,color:#ffffff
+```
+
+`main.ts` enables `rawBody` because the request fingerprint has to hash the
+bytes the client actually sent. Re-serialising the validated DTO would produce
+different bytes for the same request and make the hash check meaningless.
+
+---
+
+## 3. Request lifecycle, the winner
 
 One transaction covers the claim and the write, so both become visible in the
 same instant.
@@ -83,7 +124,7 @@ sequenceDiagram
 
 ---
 
-## 3. Request lifecycle, the losers
+## 4. Request lifecycle, the losers
 
 Two distinct loser paths depending on whether the winner has committed yet.
 The second one is the branch most implementations get wrong.
@@ -96,7 +137,7 @@ sequenceDiagram
     participant PG as Postgres
 
     rect rgb(233, 238, 233)
-    Note over C2,PG: Case 1 — winner already committed
+    Note over C2,PG: Case 1. Winner already committed
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
     PG-->>API: 0 rows
@@ -106,7 +147,7 @@ sequenceDiagram
     end
 
     rect rgb(245, 235, 234)
-    Note over C2,PG: Case 2 — winner still uncommitted
+    Note over C2,PG: Case 2. Winner still uncommitted
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
     PG-->>API: 0 rows, no blocking
@@ -122,7 +163,7 @@ keeps 499 losers from holding connections until the winner commits.
 
 ---
 
-## 4. The naive race
+## 5. The naive race
 
 Same picture, minus the index. Every transaction reads an empty table and every
 one of them writes.
@@ -148,7 +189,7 @@ sequenceDiagram
 
 ---
 
-## 5. Idempotency key state machine
+## 6. Idempotency key state machine
 
 ```mermaid
 stateDiagram-v2
@@ -174,15 +215,19 @@ payment, which frees the key rather than poisoning it.
 
 ---
 
-## 6. Handler decision tree
+## 7. Handler decision tree
+
+`ValidationPipe` runs while NestJS resolves the handler's parameters, so it
+fires before any code in the controller body. A malformed payload is therefore
+rejected before the missing-header check is reached. Both return `400`.
 
 ```mermaid
 flowchart TD
-    START["POST /payments"] --> HDR{"Idempotency-Key<br/>present?"}
-    HDR -->|no| E400["400 missing header"]
-    HDR -->|yes| VALID{"body parses and<br/>amount is positive?"}
-    VALID -->|no| E422A["422 invalid payload"]
-    VALID -->|yes| CLAIM["INSERT key<br/>ON CONFLICT DO NOTHING"]
+    START["POST /payments"] --> VALID{"body passes<br/>ValidationPipe?"}
+    VALID -->|no| E400A["400 invalid payload"]
+    VALID -->|yes| HDR{"Idempotency-Key<br/>present?"}
+    HDR -->|no| E400B["400 missing header"]
+    HDR -->|yes| CLAIM["INSERT key<br/>ON CONFLICT DO NOTHING"]
 
     CLAIM --> WON{"row returned?"}
     WON -->|yes| WRITE["INSERT payment<br/>store response<br/>COMMIT"]
@@ -192,19 +237,19 @@ flowchart TD
     READ --> VIS{"row visible?"}
     VIS -->|no| C409["409 Retry-After<br/>winner uncommitted"]
     VIS -->|yes| HASH{"request hash<br/>matches?"}
-    HASH -->|no| E422B["422 key reused<br/>with different payload"]
+    HASH -->|no| E422["422 key reused<br/>with different payload"]
     HASH -->|yes| ST{"status?"}
     ST -->|in_progress| C409
     ST -->|completed| R200["201 Replayed true<br/>stored bytes"]
 
     style R201 fill:#1f4e79,color:#ffffff
     style R200 fill:#7b8a82,color:#ffffff
-    style C409 fill:#e4e7e3
+    style C409 fill:#e4e7e3,color:#111111
 ```
 
 ---
 
-## 7. Schema
+## 8. Schema
 
 ```mermaid
 erDiagram
@@ -212,10 +257,10 @@ erDiagram
 
     IDEMPOTENCY_KEYS {
         text key PK "the arbiter"
-        bytea request_hash "sha256 of raw body"
+        text request_hash "sha256 hex of raw body"
         text status "in_progress or completed"
         int response_code
-        jsonb response_body "exact bytes to replay"
+        text response_body "exact bytes to replay"
         timestamptz created_at
         timestamptz expires_at
     }
@@ -230,13 +275,33 @@ erDiagram
     }
 ```
 
+`response_body` is `text` rather than `jsonb` on purpose. jsonb normalises key
+order and whitespace, so a replay would return different bytes than the
+original response even though the value is equal.
+
 `payments.idempotency_key` is left unconstrained on purpose. If both tables
 enforced uniqueness, the proof could not tell which mechanism stopped the
 duplicate.
 
+Two CHECK constraints carry rules the application would otherwise have to be
+trusted with:
+
+```mermaid
+flowchart LR
+    S["status"] --> SC{{"CHECK status IN<br/>in_progress, completed"}}
+    RC["response_code"] --> CHR
+    RB["response_body"] --> CHR
+    CHR{{"CHECK completed_has_response:<br/>a completed row must carry<br/>both code and body"}}
+
+    style CHR fill:#1f4e79,color:#ffffff
+```
+
+Without `completed_has_response`, a bug that forgets to store the body surfaces
+as an empty `201` to the client instead of as an error at write time.
+
 ---
 
-## 8. Console data flow
+## 9. Console data flow
 
 ```mermaid
 sequenceDiagram
@@ -268,9 +333,14 @@ Requests are constructed before any are released. Building them inside the loop
 would stagger the start by however long construction takes, which is the same
 order of magnitude as the window being tested.
 
+The proof harness at `backend/proof/proof.ts` does the same thing with an
+explicit undici `Agent`. Node's default dispatcher caps concurrent connections
+per origin, and left alone it would quietly serialise the burst, at which point
+even the naive build passes.
+
 ---
 
-## 9. Deployment
+## 10. Deployment
 
 ```mermaid
 flowchart TB
@@ -299,9 +369,12 @@ Pool size is deliberately far below the burst size. Losers must release their
 connection immediately, or the experiment measures queueing instead of
 correctness.
 
+Both instances race to apply `0001_schema.sql` on boot, which is why every
+statement in it is `IF NOT EXISTS`.
+
 ---
 
-## 10. Repository history
+## 11. Repository history
 
 ```mermaid
 gitGraph
@@ -313,7 +386,7 @@ gitGraph
 The diff worth reading:
 
 ```bash
-git diff v0-naive v1-idempotent -- migrations internal/store
+git diff v0-naive v1-idempotent -- backend/migrations backend/src
 ```
 
 Three files, and only one idea: stop asking the database a question whose
