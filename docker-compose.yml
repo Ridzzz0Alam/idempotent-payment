@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: idem
+      POSTGRES_PASSWORD: idem
+      POSTGRES_DB: idem
+    ports: ["5432:5432"]
+    command: ["postgres", "-c", "max_connections=200"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idem"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  api-1: &api
+    build: .
+    environment:
+      DATABASE_URL: postgres://idem:idem@db:5432/idem
+      INSTANCE_ID: api-1
+      PORT: "8080"
+      PG_POOL_MAX: "20"
+    depends_on:
+      db: { condition: service_healthy }
+
+  api-2:
+    <<: *api
+    environment:
+      DATABASE_URL: postgres://idem:idem@db:5432/idem
+      INSTANCE_ID: api-2
+      PORT: "8080"
+      PG_POOL_MAX: "20"
+
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports: ["8080:8080"]
+    depends_on: [api-1, api-2]

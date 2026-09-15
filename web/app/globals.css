@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+/* Tailwind v4 has no JS config. Tokens are declared here and become utilities
+   automatically: --color-ledger-sage yields bg-ledger-sage, text-ledger-sage. */
+@theme {
+  --color-paper: #eff1ee;
+  --color-paper-sunk: #e4e7e3;
+  --color-ink: #1e2422;
+  --color-ink-soft: #5a635e;
+  --color-rule: #ccd2cb;
+
+  /* The three states the whole product is about. */
+  --color-created: #1f4e79; /* a row was written */
+  --color-replayed: #7b8a82; /* the stored response came back */
+  --color-alarm: #a8322d; /* a duplicate, or a call that failed */
+
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  /* Figures line up in the ledger without forcing mono on running text. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-created);
+  outline-offset: 2px;
+}
+
+/* Cells settle rather than pop. The transition exists to show which cell just
+   changed during a fast burst; it is not decoration. */
+.cell {
+  transition:
+    background-color 140ms ease-out,
+    transform 140ms ease-out;
+}
+
+.cell-settled {
+  transform: scale(1);
+}
+
+.cell-landing {
+  transform: scale(1.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell {
+    transition: none;
+  }
+  .cell-landing {
+    transform: none;
+  }
+}
