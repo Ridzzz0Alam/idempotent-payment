@@ -13,6 +13,7 @@
   --color-created: #1f4e79; /* a row was written */
   --color-replayed: #7b8a82; /* the stored response came back */
   --color-alarm: #a8322d; /* a duplicate, or a call that failed */
+  --color-lost: #b8860b;  /* a reply the customer never received */
 
   --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, monospace;
@@ -58,4 +59,17 @@ body {
   .cell-landing {
     transform: none;
   }
+}
+
+/* The checkout pane should feel like a product, not a debug view. */
+.cell:hover {
+  filter: brightness(0.92);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }

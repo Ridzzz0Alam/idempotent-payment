@@ -1,7 +1,7 @@
 DB ?= postgres://idem:idem@localhost:5432/idem
 N  ?= 500
 
-.PHONY: up down proof reset logs
+.PHONY: up down proof reset logs lab
 
 up:
 	docker compose up --build -d
@@ -20,3 +20,6 @@ reset:
 
 proof:
 	cd backend && npm run proof -- --n $(N) --db "$(DB)" --label "$$(git describe --tags --always)"
+
+lab:
+	cd frontend && ([ -f .env ] || cp .env.example .env) && npm install && npm run dev

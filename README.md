@@ -14,11 +14,11 @@ reasonably ask whether some in-process lock was doing the work.
 ```mermaid
 flowchart LR
     subgraph browser["Browser"]
-        UI["Console UI<br/>web/app/page.tsx"]
+        UI["Lab UI<br/>frontend/app/page.tsx"]
     end
 
     subgraph next["Next.js 16"]
-        RH["Burst route handler<br/>web/app/api/burst/route.ts"]
+        RH["Route handlers<br/>frontend/app/api/*"]
     end
 
     subgraph edge["Load balancer"]
@@ -37,7 +37,7 @@ flowchart LR
 
     PROOF["Proof harness<br/>backend/proof/proof.ts"]
 
-    UI -->|"POST /api/burst"| RH
+    UI -->|"/api/pay, /api/burst"| RH
     RH -->|"N concurrent POSTs"| NX
     PROOF -->|"N concurrent POSTs"| NX
     RH -.->|"NDJSON stream"| UI
@@ -47,6 +47,9 @@ flowchart LR
     A1 -->|"pool max 20"| PG
     A2 -->|"pool max 20"| PG
     PG --- IDX
+    RH -.->|"GET /healthz on :8081, :8082"| A1
+    RH -.-> A2
+    RH -->|"read-only SELECT"| PG
     PROOF -->|"SELECT count for ground truth"| PG
 
     style IDX fill:#1f4e79,color:#ffffff
@@ -259,7 +262,7 @@ backend/
 │   └── health/health.controller.ts
 ├── proof/proof.ts                 500 concurrent callers, one key, DB assertions
 └── migrations/0001_schema.sql
-web/                              Next.js console
+frontend/                         Next.js lab; AGENT.md is its integration spec
 docs/DIAGRAMS.md                  every diagram, including deployment
 ```
 
@@ -272,11 +275,12 @@ transport, wiring, or measurement.
 cd backend && npm install
 make up          # postgres + two API instances + nginx on :8080
 make proof       # 500 concurrent requests, one key
+make lab         # the interactive lab on :3000
 ```
 
-`make up`, `make down`, and `make proof` run from the repo root. The `Makefile`
-and `docker-compose.yml` there orchestrate `backend/` and, once it exists, a
-sibling frontend.
+`make up`, `make down`, `make proof`, and `make lab` run from the repo root.
+The `Makefile` and `docker-compose.yml` there orchestrate `backend/` and
+`frontend/`.
 
 Expected:
 
@@ -341,16 +345,27 @@ The whole fix:
 git diff v0-naive v1-idempotent -- backend/migrations backend/src
 ```
 
-## The console
+## The lab
 
-`web/` is the Next.js 16 console. It only ever speaks HTTP to `:8080`, so the
+`frontend/` is a Next.js 16 teaching lab. Left pane is what a customer could
+know; right pane is every request that was really sent and the rows really in
+Postgres. Five scenarios: a normal payment, a lost response, a triple click, an
+instance dying mid-checkout, and the 500-caller burst.
+
+It speaks HTTP to `:8080` for payments, polls `:8081` and `:8082` for
+instance health, and reads the two tables through a read-only connection. The
 backend language is invisible to it, which is a reasonable argument that the
 API contract is the real interface.
 
 ```bash
-cd web && npm install
-IDEM_API_URL=http://localhost:8080 npm run dev
+make up
+make lab         # http://localhost:3000
 ```
+
+For scenario 4, run `docker compose stop api-1` yourself, then
+`docker compose start api-1`. There is deliberately no button for it.
+[`frontend/AGENT.md`](frontend/AGENT.md) has the full contract, invariants,
+and a verification checklist.
 
 The fan-out runs server-side in a route handler. Chrome opens about six
 connections per host, so a browser-side burst would serialise itself and pass

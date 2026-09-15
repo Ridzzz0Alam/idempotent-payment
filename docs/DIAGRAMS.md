@@ -10,18 +10,19 @@ the complete set.
 
 ## 1. System architecture
 
-Where each process lives and what it is allowed to talk to. The console never
-reaches the API directly; the harness is the only thing with a database
-connection besides the API itself.
+Where each process lives and what it is allowed to talk to. The browser never
+reaches the API directly; every request is sent from a Next.js route handler.
+Besides the API itself, only the proof harness and the lab's read-only ledger
+route open a database connection, and neither of them writes.
 
 ```mermaid
 flowchart LR
     subgraph browser["Browser"]
-        UI["Console UI<br/>web/app/page.tsx"]
+        UI["Lab UI<br/>frontend/app/page.tsx"]
     end
 
     subgraph next["Next.js 16"]
-        RH["Burst route handler<br/>web/app/api/burst/route.ts"]
+        RH["Route handlers<br/>frontend/app/api/*"]
     end
 
     subgraph edge["Load balancer"]
@@ -40,7 +41,7 @@ flowchart LR
 
     PROOF["Proof harness<br/>backend/proof/proof.ts"]
 
-    UI -->|"POST /api/burst"| RH
+    UI -->|"/api/pay, /api/burst"| RH
     RH -->|"N concurrent POSTs"| NX
     PROOF -->|"N concurrent POSTs"| NX
     RH -.->|"NDJSON stream"| UI
@@ -50,6 +51,9 @@ flowchart LR
     A1 --> PG
     A2 --> PG
     PG --- IDX
+    RH -.->|"GET /healthz on :8081, :8082"| A1
+    RH -.-> A2
+    RH -->|"read-only SELECT"| PG
     PROOF -->|"SELECT count for ground truth"| PG
 
     style IDX fill:#1f4e79,color:#ffffff
@@ -301,13 +305,13 @@ as an empty `201` to the client instead of as an error at write time.
 
 ---
 
-## 9. Console data flow
+## 9. Burst data flow
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
-    participant UI as Console
+    participant UI as Lab
     participant RH as Route handler
     participant LB as nginx
     participant API as api-1 and api-2
@@ -346,16 +350,19 @@ even the naive build passes.
 flowchart TB
     subgraph host["Docker host"]
         subgraph net["compose network"]
-            LB["lb<br/>nginx:1.27-alpine<br/>published :8080"]
-            A1["api-1<br/>INSTANCE_ID=api-1"]
-            A2["api-2<br/>INSTANCE_ID=api-2"]
-            DB[("db<br/>postgres:16-alpine<br/>max_connections=200")]
+            LB["lb<br/>nginx:1.28-alpine<br/>published :8080"]
+            A1["api-1<br/>INSTANCE_ID=api-1<br/>published :8081"]
+            A2["api-2<br/>INSTANCE_ID=api-2<br/>published :8082"]
+            DB[("db<br/>postgres:16-alpine<br/>published :5432")]
         end
     end
 
-    DEV["npm run dev<br/>:3000"]
+    DEV["frontend<br/>npm run dev :3000"]
 
-    DEV --> LB
+    DEV -->|"payments"| LB
+    DEV -.->|"health polls"| A1
+    DEV -.->|"health polls"| A2
+    DEV -.->|"read-only ledger"| DB
     LB --> A1
     LB --> A2
     A1 -->|"pool max 20"| DB
@@ -368,6 +375,12 @@ flowchart TB
 Pool size is deliberately far below the burst size. Losers must release their
 connection immediately, or the experiment measures queueing instead of
 correctness.
+
+The per-instance ports exist only for the lab's health strip. Stopping one
+instance takes it out of Docker's DNS, and nginx re-resolves every two seconds
+and fails over on connection errors, so traffic moves to the survivor. nginx
+never re-sends a POST that already reached an instance, which would be exactly
+the hidden retry the proof is designed to catch.
 
 Both instances race to apply `0001_schema.sql` on boot, which is why every
 statement in it is `IF NOT EXISTS`.
