@@ -117,7 +117,7 @@ sequenceDiagram
     participant API as api-2
     participant PG as Postgres
 
-    rect rgb(233, 238, 233)
+    rect rgba(20, 40, 30, 0.55)
     Note over C2,PG: Case 1. Winner already committed
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
@@ -127,7 +127,7 @@ sequenceDiagram
     API-->>C2: 201, Idempotency-Replayed: true
     end
 
-    rect rgb(245, 235, 234)
+    rect rgba(60, 20, 20, 0.55)
     Note over C2,PG: Case 2. Winner still uncommitted
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
@@ -269,10 +269,23 @@ docs/DIAGRAMS.md                  every diagram, including deployment
 `payments.service.ts` is the only interesting file. Everything else is
 transport, wiring, or measurement.
 
-## Running it
+## Running locally
+
+### Prerequisites
+
+- **Docker** with Compose v2 (`docker compose`, not `docker-compose`)
+- **Node.js 20.11+** and npm, for the proof harness and the lab
+- **make** and **curl**, optional. Every target has a plain equivalent below,
+  which is the easier route on Windows.
+
+Ports `5432`, `8080`, `8081`, `8082`, and `3000` must be free.
+
+### Quick start
+
+From the repo root:
 
 ```bash
-cd backend && npm install
+cd backend && npm install && cd ..
 make up          # postgres + two API instances + nginx on :8080
 make proof       # 500 concurrent requests, one key
 make lab         # the interactive lab on :3000
@@ -280,9 +293,76 @@ make lab         # the interactive lab on :3000
 
 `make up`, `make down`, `make proof`, and `make lab` run from the repo root.
 The `Makefile` and `docker-compose.yml` there orchestrate `backend/` and
-`frontend/`.
+`frontend/`. The API applies `backend/migrations/0001_schema.sql` on boot, so
+there is no separate migration step.
 
-Expected:
+### Without make
+
+The same steps as plain commands, from the repo root:
+
+```bash
+# 1. Start postgres, api-1, api-2, and nginx
+docker compose up --build -d
+
+# 2. Wait until the load balancer answers
+curl http://localhost:8080/healthz          # {"status":"ok"}
+
+# 3. Run the proof
+cd backend
+npm install
+npm run proof -- --n 500
+
+# 4. Run the lab (in another terminal)
+cd frontend
+cp .env.example .env                        # Copy-Item .env.example .env on PowerShell
+npm install
+npm run dev                                 # http://localhost:3000
+```
+
+The proof accepts `--n`, `--url` (default `http://localhost:8080`), `--db`,
+`--key`, `--retries`, and `--label`.
+
+### Try a request
+
+```bash
+curl -i http://localhost:8080/payments \
+  -H "content-type: application/json" \
+  -H "idempotency-key: demo-1" \
+  -d '{"amount":4200,"currency":"EUR","reference":"invoice-7781"}'
+```
+
+Send it again and the response is identical, with
+`Idempotency-Replayed: true`. Change the body with the same key and you get
+`422`.
+
+### Running the API outside Docker
+
+Useful for working on `backend/src` with watch mode. Start only Postgres, then
+run one instance directly:
+
+```bash
+docker compose up -d db
+cd backend
+cp .env.example .env
+npm install
+npm run start:dev                           # api-local on :8080
+```
+
+This occupies `:8080`, so don't run it alongside the full stack. Point the
+proof at it with `npm run proof`, but note that with a single process the
+proof no longer rules out an in-process lock. Use `make up` for the real test.
+
+### Resetting and stopping
+
+```bash
+make reset       # TRUNCATE both tables, keep the containers running
+make down        # stop everything and delete the database volume
+```
+
+Without make: `docker compose down -v`. To clear the tables only, run
+`docker compose exec db psql -U idem -c "TRUNCATE payments, idempotency_keys"`.
+
+### Expected proof output
 
 ```
 payment rows created  1

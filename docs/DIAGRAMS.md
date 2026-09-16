@@ -140,7 +140,7 @@ sequenceDiagram
     participant API as api-2
     participant PG as Postgres
 
-    rect rgb(233, 238, 233)
+    rect rgba(20, 40, 30, 0.55)
     Note over C2,PG: Case 1. Winner already committed
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
@@ -150,7 +150,7 @@ sequenceDiagram
     API-->>C2: 201, Idempotency-Replayed: true
     end
 
-    rect rgb(245, 235, 234)
+    rect rgba(60, 20, 20, 0.55)
     Note over C2,PG: Case 2. Winner still uncommitted
     C2->>API: POST /payments, key k1
     API->>PG: INSERT ... ON CONFLICT DO NOTHING
